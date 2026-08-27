@@ -1,0 +1,10 @@
+{
+  "appId": "app.cglmock.nihar",
+  "appName": "CGL Mock Test",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
