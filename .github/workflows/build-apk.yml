@@ -1,0 +1,115 @@
+name: mock test 
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Write the project files
+        run: |
+          cat > package.json <<'JSON'
+          {
+            "name": "cgl-mock-test",
+            "version": "1.0.0",
+            "private": true
+          }
+          JSON
+          cat > capacitor.config.json <<'JSON'
+          {
+            "appId": "app.cglmock.nihar",
+            "appName": "CGL Mock Test",
+            "webDir": "www",
+            "plugins": {
+              "CapacitorHttp": { "enabled": true }
+            }
+          }
+          JSON
+
+      - name: Install Capacitor
+        run: npm install @capacitor/core@^8 @capacitor/cli@^8 @capacitor/android@^8
+
+      - name: Bundle pdf.js
+        run: |
+          npm pack pdfjs-dist@2.16.105
+          tar xzf pdfjs-dist-2.16.105.tgz
+          mkdir -p www/pdfjs
+          cp package/build/pdf.min.js package/build/pdf.worker.min.js www/pdfjs/
+          rm -rf package pdfjs-dist-2.16.105.tgz
+
+      - name: Find the app file and put it in place
+        run: |
+          node - <<'JS'
+          const fs = require('fs'), path = require('path');
+          const found = [];
+          (function walk(dir) {
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (e.name === '.git' || e.name === 'node_modules') continue;
+              const full = path.join(dir, e.name);
+              if (e.isDirectory()) walk(full);
+              else if (/\.html$/i.test(e.name)) found.push(full);
+            }
+          })('.');
+          if (!found.length) throw new Error('No .html file found in the repo. Upload the app file.');
+          found.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
+          const src = found[0];
+          console.log('Using ' + src + ' (' + Math.round(fs.statSync(src).size / 1024) + ' KB)');
+          fs.mkdirSync('www', { recursive: true });
+          if (path.resolve(src) !== path.resolve('www/index.html')) {
+            fs.copyFileSync(src, 'www/index.html');
+            if (path.dirname(path.resolve(src)) === path.resolve('www')) fs.unlinkSync(src);
+          }
+          JS
+
+      - name: Adjust index.html for the app build
+        run: |
+          node - <<'JS'
+          const fs = require('fs');
+          const p = 'www/index.html';
+          let s = fs.readFileSync(p, 'utf8');
+          const edits = [
+            ["var PDFJS_BASE='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/';",
+             "var PDFJS_BASE='./pdfjs/';"],
+            ["var HOSTED_URL='https://spectacular-twilight-9b67be.netlify.app';",
+             "var HOSTED_URL='';"],
+            ["if('serviceWorker' in navigator && location.protocol.indexOf('http')===0){",
+             "if('serviceWorker' in navigator && location.hostname!=='localhost' && location.protocol.indexOf('http')===0){"]
+          ];
+          for (const [from, to] of edits) {
+            if (s.split(from).length - 1 !== 1) throw new Error('Could not find, or found twice: ' + from.slice(0, 40));
+            s = s.replace(from, to);
+          }
+          s = s.replace(/var APP_VERSION='[^']*';/, "var APP_VERSION='android build';");
+          fs.writeFileSync(p, s);
+          console.log('index.html adjusted');
+          JS
+
+      - name: Create the Android project
+        run: npx cap add android
+
+      - name: Build the APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: cgl-mock-test-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
